@@ -83,11 +83,13 @@ mcp_raster <- function(OPHA2.csv){
   data.proj <- SpatialPointsDataFrame(xy,data, proj4string = CRS("+proj=utm +zone=12 +ellps=WGS84 +units=m +no_defs"))
   xy <- SpatialPoints(data.proj@coords)
   mcp.out <- mcp(xy, percent=100, unout="ha")
+  #incorporate 100% of data points
   mcp.points <- cbind((data.frame(xy)),data$individual.local.identifier)
   colnames(mcp.points) <- c("x","y", "identifier")
   mcp.poly <- fortify(mcp.out, region = "id")
   units <- grid.text(paste(round(mcp.out@data$area,2),"ha"), x=0.85,  y=0.95,
                      gp=gpar(fontface=4, col="white", cex=0.9), draw = FALSE)
+  #This is where the units are written on the image, rounded to 2 decimal places
   mcp.plot <- autoplot.OpenStreetMap(raster_utm, expand = TRUE) + theme_bw() + theme(legend.position="none") +
     theme(panel.border = element_rect(colour = "black", fill=NA, size=1)) +
     geom_polygon(data=mcp.poly, aes(x=mcp.poly$long, y=mcp.poly$lat), alpha=0.8) +
@@ -95,6 +97,7 @@ mcp_raster <- function(OPHA2.csv){
     labs(x="Easting (m)", y="Northing (m)", title=mcp.points$identifier) +
     theme(legend.position="none", plot.title = element_text(face = "bold", hjust = 0.5)) + 
     annotation_custom(units)
+  #annotation custom is calling back to object units to put it on the map
   mcp.plot
 }
 
@@ -136,7 +139,7 @@ kde_raster <- function(OPHA1.csv){
 
 pblapply(files, kde_raster)
 
-
+#SEE LOOPING FILE BELOW
 
 kde_raster <- function(filename){
   data <- read.csv(file = filename)
@@ -146,7 +149,10 @@ kde_raster <- function(filename){
   data.proj <- SpatialPointsDataFrame(xy,data, proj4string = CRS("+proj=utm +zone=47 +ellps=WGS84 +units=m +no_defs"))
   xy <- SpatialPoints(data.proj@coords)
   kde<-kernelUD(xy, h="href", kern="bivnorm", grid=100)
+  #h decides how to smooth polygons... talk to Gienger about h and kern, maybe about grid
+  #kernelUD estimates the UD of the animal... what is UD?
   ver <- getverticeshr(kde, 95)
+  #95= 95% encapsulation of data
   kde.points <- cbind((data.frame(data.proj@coords)),data$individual.local.identifier)
   colnames(kde.points) <- c("x","y","identifier")
   kde.poly <- fortify(ver, region = "id")
@@ -228,6 +234,7 @@ brownianbridge <- function(filename){
   bb_image <- crop(opha.traj, bb_ver, 
                  proj4string = CRS("+proj=utm +zone=47 +
                                    ellps=WGS84 +units=m +no_defs"))
+  #crop removes everything except for the data because the entire image was blackened... cropped to projection
   bb_units <- grid.text(paste(round(bb_ver$area,2)," ha"), x=0.85,  y=0.95,
                       gp=gpar(fontface=4, col="white", cex=0.9), draw = FALSE)
   bb.plot <- autoplot.OpenStreetMap(raster_utm, expand = TRUE) + theme_bw() + theme(legend.position="none") +
@@ -242,5 +249,31 @@ brownianbridge <- function(filename){
   bb.plot
 }
 pblapply(files, brownianbridge)
+#brighter colors indicate hotspots, so where it moved out of an area and returned to it
+#this method sort of erases multiple consecutive relocations from a single area, therefore favoring truly revisited areas
+#------------------------------------------------------------
+opha.move <- move(x=OPHA1$location.long, 
+                  y=OPHA1$location.lat, 
+                  time=as.POSIXct(OPHA1$timestamp, 
+                                  format="%Y-%m-%d %H:%M:%S", tz="Asia/Bangkok"), 
+                  proj=CRS("+proj=longlat +ellps=WGS84 +datum=WGS84"),
+                  data=OPHA1, animal=OPHA1$individual.local.identifier, 
+                  sensor=OPHA1$sensor.type)
 
+movement <- align_move(opha.move, res = "max", digit = 0, unit = "secs")
 
+get_maptypes("osm")
+
+frames <- frames_spatial(movement, path_colours = "red",
+                         map_service = "osm",
+                         map_type = "topographic",
+                         map_token = Sys.getenv('map_token'),
+                         alpha = 0.5) %>% 
+  add_labels(x = "Longitude", y = "Latitude") %>%
+  add_northarrow() %>% 
+  add_scalebar() %>% 
+  add_timestamps(movement, type = "label") %>% 
+  add_progress()
+
+animate_frames(frames, fps = 5, overwrite = TRUE,
+               out_file = "./moveVis-5fps.gif")
